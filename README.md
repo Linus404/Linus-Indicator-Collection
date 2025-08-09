@@ -30,6 +30,3 @@
 
 ## Further information
 This [repo](https://www.github.com/trading-code/ninjatrader-freeorderflow) has the nt8 Order Flow indicators for free and open source
-
-I will not be working on NinjaTrader indicators anymore.  
-As far as I know, it's currently not possible to make a good volume profile in Pinescript. If you know otherwise please let me know!
