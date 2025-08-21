@@ -19,12 +19,12 @@ using NinjaTrader.Data;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.Core.FloatingPoint;
 using NinjaTrader.NinjaScript.DrawingTools;
-using NinjaTrader.NinjaScript.Indicators.LambdaLinus;
+using NinjaTrader.NinjaScript.Indicators.NTLambda;
 #endregion
 
-namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
+namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 {
-    public class COFI : Indicator
+    public class NTLCOFI : Indicator
     {
         private double buyVolume;
         private double sellVolume;
@@ -44,8 +44,8 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
             if (State == State.SetDefaults)
             {
                 Description = @"Cumulative Order Flow Imbalance (COFI) / Weighted Order Flow Imbalance (WOFI) Indicator";
-                Name = "COFI";
-                Calculate = Calculate.OnBarClose;
+                Name = "NTL COFI";
+                Calculate = Calculate.OnEachTick;
                 IsOverlay = false;
                 DisplayInDataBox = true;
                 DrawOnPricePanel = false;
@@ -88,8 +88,6 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
             else if (State == State.Configure)
             {
                 AddDataSeries(Data.BarsPeriodType.Tick, 1);
-                AddDataSeries(Instrument.FullName, Data.BarsPeriodType.Tick, 1, Data.MarketDataType.Bid);
-                AddDataSeries(Instrument.FullName, Data.BarsPeriodType.Tick, 1, Data.MarketDataType.Ask);
             }
             else if (State == State.DataLoaded)
             {
@@ -113,57 +111,35 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
 
         protected override void OnBarUpdate()
         {
-            // Update bid/ask prices
-            if (BarsInProgress == 2) // Bid series
-            {
-                currentBid = Close[0];
-                return;
-            }
-            else if (BarsInProgress == 3) // Ask series
-            {
-                currentAsk = Close[0];
-                return;
-            }
-
-            // Handle trade ticks
-            if (BarsInProgress == 1)
-            {
-                double tradePrice = Close[0];
-                double tradeVolume = Volume[0];
-
-                // Classify trade using utility method
-                int classification = OrderFlowUtils.ClassifyTrade(tradePrice, currentBid, currentAsk, lastTradePrice);
-
-                if (classification > 0)
-                    buyVolume += tradeVolume;
-                else if (classification < 0)
-                    sellVolume += tradeVolume;
-                else
-                {
-                    buyVolume += tradeVolume * 0.5;
-                    sellVolume += tradeVolume * 0.5;
-                }
-
-                lastTradePrice = tradePrice;
-            }
-            // Handle main timeframe bars
-            else if (BarsInProgress == 0)
-            {
+            if(BarsInProgress == 0) {
                 if (CurrentBar < 1) return;
 
-                // Calculate current bar OFI using utility
-                double ofi = OrderFlowUtils.CalculateOFI(buyVolume, sellVolume);
-                double totalVolume = buyVolume + sellVolume;
+                // Handle main timeframe bar updates - only reset volumes at bar start
+                if(IsFirstTickOfBar) {
+                    // Calculate current bar OFI using utility from NTLCommons only if we have volume
+                    double ofi = 0;
+                    double totalVolume = buyVolume + sellVolume;
+                    
+                    if (totalVolume > 0) {
+                        ofi = OrderFlowUtils.CalculateOFI(buyVolume, sellVolume);
+                    }
 
-                // Add to history
-                ofiHistory.Add(ofi);
-                volumeHistory.Add(totalVolume);
+                    // Add to history only if we have meaningful data
+                    if (totalVolume > 0 || ofiHistory.Count == 0) {
+                        ofiHistory.Add(ofi);
+                        volumeHistory.Add(totalVolume);
+                    }
 
-                // Check for reset period
-                if (ResetPeriod > 0 && ofiHistory.Count > ResetPeriod)
-                {
-                    ofiHistory.RemoveAt(0);
-                    volumeHistory.RemoveAt(0);
+                    // Check for reset period
+                    if (ResetPeriod > 0 && ofiHistory.Count > ResetPeriod)
+                    {
+                        ofiHistory.RemoveAt(0);
+                        volumeHistory.RemoveAt(0);
+                    }
+
+                    // Reset volumes for the new bar
+                    buyVolume = 0;
+                    sellVolume = 0;
                 }
 
                 // Calculate weighted/cumulative value
@@ -217,10 +193,32 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
                 {
                     PlotBrushes[3][0] = Brushes.Transparent;
                 }
+            }
 
-                // Reset volumes for next bar
-                buyVolume = 0;
-                sellVolume = 0;
+            // Process tick data (works for both historical and tick replay)
+            if(BarsInProgress == 1) {
+                double price = BarsArray[1].GetClose(CurrentBars[1]);
+                double ask = BarsArray[1].GetAsk(CurrentBars[1]);
+                double bid = BarsArray[1].GetBid(CurrentBars[1]);
+                double volume = BarsArray[1].GetVolume(CurrentBars[1]);
+                
+                // Only process valid tick data
+                if (volume > 0 && ask > 0 && bid > 0 && ask > bid) {
+                    // Classify trades using bid/ask comparison (like AggressionDelta)
+                    if(price >= ask) {
+                        buyVolume += volume;
+                    }
+                    else if(price <= bid) {
+                        sellVolume += volume;
+                    }
+                    else {
+                        // Split volume for mid-market trades
+                        buyVolume += volume * 0.5;
+                        sellVolume += volume * 0.5;
+                    }
+
+                    lastTradePrice = price;
+                }
             }
         }
 
@@ -383,55 +381,55 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-    public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
-    {
-        private LambdaLinus.COFI[] cacheCOFI;
-        public LambdaLinus.COFI COFI(WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
-        {
-            return COFI(Input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
-        }
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private NTLambda.NTLCOFI[] cacheNTLCOFI;
+		public NTLambda.NTLCOFI NTLCOFI(WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
+		{
+			return NTLCOFI(Input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
+		}
 
-        public LambdaLinus.COFI COFI(ISeries<double> input, WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
-        {
-            if (cacheCOFI != null)
-                for (int idx = 0; idx < cacheCOFI.Length; idx++)
-                    if (cacheCOFI[idx] != null && cacheCOFI[idx].Weighting == weighting && cacheCOFI[idx].Lambda == lambda && cacheCOFI[idx].WindowSize == windowSize && cacheCOFI[idx].ResetPeriod == resetPeriod && cacheCOFI[idx].MA1_Type == mA1_Type && cacheCOFI[idx].MA1_Length == mA1_Length && cacheCOFI[idx].MA2_Type == mA2_Type && cacheCOFI[idx].MA2_Length == mA2_Length && cacheCOFI[idx].ShowMADifference == showMADifference && cacheCOFI[idx].LineWidth == lineWidth && cacheCOFI[idx].EqualsInput(input))
-                        return cacheCOFI[idx];
-            return CacheIndicator<LambdaLinus.COFI>(new LambdaLinus.COFI() { Weighting = weighting, Lambda = lambda, WindowSize = windowSize, ResetPeriod = resetPeriod, MA1_Type = mA1_Type, MA1_Length = mA1_Length, MA2_Type = mA2_Type, MA2_Length = mA2_Length, ShowMADifference = showMADifference, LineWidth = lineWidth }, input, ref cacheCOFI);
-        }
-    }
+		public NTLambda.NTLCOFI NTLCOFI(ISeries<double> input, WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
+		{
+			if (cacheNTLCOFI != null)
+				for (int idx = 0; idx < cacheNTLCOFI.Length; idx++)
+					if (cacheNTLCOFI[idx] != null && cacheNTLCOFI[idx].Weighting == weighting && cacheNTLCOFI[idx].Lambda == lambda && cacheNTLCOFI[idx].WindowSize == windowSize && cacheNTLCOFI[idx].ResetPeriod == resetPeriod && cacheNTLCOFI[idx].MA1_Type == mA1_Type && cacheNTLCOFI[idx].MA1_Length == mA1_Length && cacheNTLCOFI[idx].MA2_Type == mA2_Type && cacheNTLCOFI[idx].MA2_Length == mA2_Length && cacheNTLCOFI[idx].ShowMADifference == showMADifference && cacheNTLCOFI[idx].LineWidth == lineWidth && cacheNTLCOFI[idx].EqualsInput(input))
+						return cacheNTLCOFI[idx];
+			return CacheIndicator<NTLambda.NTLCOFI>(new NTLambda.NTLCOFI(){ Weighting = weighting, Lambda = lambda, WindowSize = windowSize, ResetPeriod = resetPeriod, MA1_Type = mA1_Type, MA1_Length = mA1_Length, MA2_Type = mA2_Type, MA2_Length = mA2_Length, ShowMADifference = showMADifference, LineWidth = lineWidth }, input, ref cacheNTLCOFI);
+		}
+	}
 }
 
 namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
-    public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
-    {
-        public Indicators.LambdaLinus.COFI COFI(WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
-        {
-            return indicator.COFI(Input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
-        }
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.NTLambda.NTLCOFI NTLCOFI(WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
+		{
+			return indicator.NTLCOFI(Input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
+		}
 
-        public Indicators.LambdaLinus.COFI COFI(ISeries<double> input, WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
-        {
-            return indicator.COFI(input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
-        }
-    }
+		public Indicators.NTLambda.NTLCOFI NTLCOFI(ISeries<double> input , WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
+		{
+			return indicator.NTLCOFI(input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
+		}
+	}
 }
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
-    public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
-    {
-        public Indicators.LambdaLinus.COFI COFI(WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
-        {
-            return indicator.COFI(Input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
-        }
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.NTLambda.NTLCOFI NTLCOFI(WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
+		{
+			return indicator.NTLCOFI(Input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
+		}
 
-        public Indicators.LambdaLinus.COFI COFI(ISeries<double> input, WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
-        {
-            return indicator.COFI(input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
-        }
-    }
+		public Indicators.NTLambda.NTLCOFI NTLCOFI(ISeries<double> input , WeightingType weighting, double lambda, int windowSize, int resetPeriod, MAType mA1_Type, int mA1_Length, MAType mA2_Type, int mA2_Length, bool showMADifference, int lineWidth)
+		{
+			return indicator.NTLCOFI(input, weighting, lambda, windowSize, resetPeriod, mA1_Type, mA1_Length, mA2_Type, mA2_Length, showMADifference, lineWidth);
+		}
+	}
 }
 
 #endregion

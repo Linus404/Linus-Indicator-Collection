@@ -3,14 +3,13 @@ using System.ComponentModel;
 using System.Xml.Serialization;
 using NinjaTrader.Cbi;
 using NinjaTrader.Gui;
-using NinjaTrader.Gui.Tools;
 using NinjaTrader.Gui.Chart;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.DrawingTools;
 using System.Windows.Media;
 using System.ComponentModel.DataAnnotations;
 
-namespace NinjaTrader.NinjaScript.Indicators.Moldys
+namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 {
     public class MoldyBars : Indicator
     {
@@ -23,7 +22,7 @@ namespace NinjaTrader.NinjaScript.Indicators.Moldys
             if (State == State.SetDefaults)
             {
                 Description = @"Identifies and colors Außenstäbe, Inside Bars, and Outside Bars with arrows.";
-                Name = "MoldyBars";
+                Name = "NTL MoldyBars";
                 Calculate = Calculate.OnBarClose;
                 IsOverlay = true;
                 DisplayInDataBox = true;
@@ -80,12 +79,14 @@ namespace NinjaTrader.NinjaScript.Indicators.Moldys
             {
                 SetBarColor(BullishAussenstabColor, true);
                 UpdateAussenstab();
+				Draw.TriangleUp(this, "ASDT" + CurrentBar, true, 0, Low[0] - TickSize, BullishAussenstabColor); // Triangle below pointing up
                 return true;
             }
             else if (Close[0] < lastAussenstabLow)
             {
                 SetBarColor(BearishAussenstabColor, true);
                 UpdateAussenstab();
+				Draw.TriangleDown(this, "ASUT" + CurrentBar, true, 0, High[0] + TickSize, BearishAussenstabColor); // Triangle above pointing down
                 return true;
             }
             return false;
@@ -112,6 +113,10 @@ namespace NinjaTrader.NinjaScript.Indicators.Moldys
                     SetBarColor(BullishInsideBarColor, true);
                 else
                     SetBarColor(BearishInsideBarColor, true);
+                
+                // Draw arrows for inside bar
+                Draw.ArrowDown(this, "IBDA" + CurrentBar, true, 0, High[0] + TickSize, Brushes.WhiteSmoke);  // Arrow above pointing down
+                Draw.ArrowUp(this, "IBUA" + CurrentBar, true, 0, Low[0] - TickSize, Brushes.WhiteSmoke); // Arrow below pointing up
                 return true;
             }
             return false;
@@ -125,6 +130,10 @@ namespace NinjaTrader.NinjaScript.Indicators.Moldys
                     SetBarColor(BullishOutsideBarColor, true);
                 else
                     SetBarColor(BearishOutsideBarColor, true);
+                
+                // Draw arrows for outside bar
+				Draw.ArrowUp(this, "OBUA" + CurrentBar, true, 0, High[0] + 2 * TickSize, Brushes.WhiteSmoke); // Arrow above pointing up
+                Draw.ArrowDown(this, "OBDA" + CurrentBar, true, 0, Low[0] - 2 * TickSize, Brushes.WhiteSmoke);  // Arrow below pointing down
                 return true;
             }
             return false;
@@ -219,19 +228,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
-		private Moldys.MoldyBars[] cacheMoldyBars;
-		public Moldys.MoldyBars MoldyBars()
+		private MoldyBars[] cacheMoldyBars;
+		public MoldyBars MoldyBars()
 		{
 			return MoldyBars(Input);
 		}
 
-		public Moldys.MoldyBars MoldyBars(ISeries<double> input)
+		public MoldyBars MoldyBars(ISeries<double> input)
 		{
 			if (cacheMoldyBars != null)
 				for (int idx = 0; idx < cacheMoldyBars.Length; idx++)
 					if (cacheMoldyBars[idx] != null &&  cacheMoldyBars[idx].EqualsInput(input))
 						return cacheMoldyBars[idx];
-			return CacheIndicator<Moldys.MoldyBars>(new Moldys.MoldyBars(), input, ref cacheMoldyBars);
+			return CacheIndicator<MoldyBars>(new MoldyBars(), input, ref cacheMoldyBars);
 		}
 	}
 }
@@ -240,12 +249,12 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.Moldys.MoldyBars MoldyBars()
+		public Indicators.MoldyBars MoldyBars()
 		{
 			return indicator.MoldyBars(Input);
 		}
 
-		public Indicators.Moldys.MoldyBars MoldyBars(ISeries<double> input )
+		public Indicators.MoldyBars MoldyBars(ISeries<double> input )
 		{
 			return indicator.MoldyBars(input);
 		}
@@ -256,12 +265,12 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.Moldys.MoldyBars MoldyBars()
+		public Indicators.MoldyBars MoldyBars()
 		{
 			return indicator.MoldyBars(Input);
 		}
 
-		public Indicators.Moldys.MoldyBars MoldyBars(ISeries<double> input )
+		public Indicators.MoldyBars MoldyBars(ISeries<double> input )
 		{
 			return indicator.MoldyBars(input);
 		}

@@ -5,10 +5,10 @@ using System.Collections.Generic;
 using System.Linq;
 #endregion
 
-namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
+namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 {
     /// <summary>
-    /// Common types and utilities shared across LambdaLinus indicators
+    /// Common types and utilities shared across NTLambda indicators
     /// </summary>
 
     /// <summary>

@@ -8,7 +8,7 @@ using NinjaTrader.Core.FloatingPoint;
 using NinjaTrader.NinjaScript.DrawingTools;
 using System.Windows.Media;
 
-namespace NinjaTrader.NinjaScript.Indicators
+namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 {
     public class MarkImportantLevels : Indicator
     {
@@ -22,7 +22,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             if (State == State.SetDefaults)
             {
                 Description = @"Marks important levels on the chart such as Overnight High/Low, Prior Settlement, Daily High/Low, etc.";
-                Name = "MarkImportantLevels";
+                Name = "NTL MoldyHighlights";
                 Calculate = Calculate.OnEachTick;
                 IsOverlay = true;
             }
@@ -58,13 +58,28 @@ namespace NinjaTrader.NinjaScript.Indicators
             isNewMonth = Time[0].Month != Time[1].Month;
             isNewYear = Time[0].Year != Time[1].Year;
 
-            if (Time[0].TimeOfDay < new TimeSpan(15, 30, 0))
+            // Overnight session: 6 PM to 8:30 AM CT (adjust for your market)
+            TimeSpan sessionStart = new TimeSpan(18, 0, 0); // 6 PM
+            TimeSpan sessionEnd = new TimeSpan(8, 30, 0);   // 8:30 AM
+            TimeSpan settlementTime = new TimeSpan(16, 0, 0); // 4 PM
+            
+            bool isOvernightSession = Time[0].TimeOfDay >= sessionStart || Time[0].TimeOfDay <= sessionEnd;
+            
+            if (isOvernightSession)
             {
-                onh = Math.Max(onh, High[0]);
-                onl = Math.Min(onl, Low[0]);
+                if (onh == double.MinValue || onl == double.MaxValue)
+                {
+                    onh = High[0];
+                    onl = Low[0];
+                }
+                else
+                {
+                    onh = Math.Max(onh, High[0]);
+                    onl = Math.Min(onl, Low[0]);
+                }
             }
 
-            if (Time[0].TimeOfDay == new TimeSpan(16, 0, 0))
+            if (Time[0].TimeOfDay >= settlementTime && Time[0].TimeOfDay < settlementTime.Add(TimeSpan.FromMinutes(5)))
             {
                 priorSettlement = Close[0];
             }
@@ -73,6 +88,9 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 dayHigh = High[0];
                 dayLow = Low[0];
+                // Reset overnight levels for new day
+                onh = double.MinValue;
+                onl = double.MaxValue;
             }
             else
             {
@@ -117,42 +135,42 @@ namespace NinjaTrader.NinjaScript.Indicators
 
             allTimeHigh = Math.Max(allTimeHigh, High[0]);
 
-            if (IsFirstTickOfBar)
-            {
-                // Update levels dictionary
-                levels.Clear();
-                levels["ONH"] = onh;
-                levels["ONL"] = onl;
-                levels["PriorSettlement"] = priorSettlement;
-                levels["DayHigh"] = dayHigh;
-                levels["DayLow"] = dayLow;
-                levels["WeekHigh"] = weekHigh;
-                levels["WeekLow"] = weekLow;
-                levels["MonthHigh"] = monthHigh;
-                levels["MonthLow"] = monthLow;
-                levels["YearHigh"] = yearHigh;
-                levels["YearLow"] = yearLow;
-                levels["ATH"] = allTimeHigh;
+            // Update levels dictionary
+            levels.Clear();
+            if (onh > double.MinValue) levels["ONH"] = onh;
+            if (onl < double.MaxValue) levels["ONL"] = onl;
+            if (priorSettlement > 0) levels["PriorSettlement"] = priorSettlement;
+            if (dayHigh > double.MinValue) levels["DayHigh"] = dayHigh;
+            if (dayLow < double.MaxValue) levels["DayLow"] = dayLow;
+            if (weekHigh > double.MinValue) levels["WeekHigh"] = weekHigh;
+            if (weekLow < double.MaxValue) levels["WeekLow"] = weekLow;
+            if (monthHigh > double.MinValue) levels["MonthHigh"] = monthHigh;
+            if (monthLow < double.MaxValue) levels["MonthLow"] = monthLow;
+            if (yearHigh > double.MinValue) levels["YearHigh"] = yearHigh;
+            if (yearLow < double.MaxValue) levels["YearLow"] = yearLow;
+            if (allTimeHigh > double.MinValue) levels["ATH"] = allTimeHigh;
 
-                // Drawing lines
+            // Drawing lines only every 10 bars to reduce performance impact
+            if (CurrentBar % 10 == 0)
+            {
                 foreach (var level in levels)
                 {
-                    Draw.Line(this, level.Key, false, 0, level.Value, CurrentBar, level.Value, GetBrushForLevel(level.Key), DashStyleHelper.Solid, 2);
+                    Draw.Line(this, level.Key + CurrentBar, false, 0, level.Value, 100, level.Value, GetBrushForLevel(level.Key), DashStyleHelper.Solid, 2);
                 }
 
                 // Drawing text labels
-                DrawSmartText("ONHText", "Overnight High", onh, GetBrushForLevel("ONH"));
-                DrawSmartText("ONLText", "Overnight Low", onl, GetBrushForLevel("ONL"));
-                DrawSmartText("PriorSettlementText", "Prior Settlement", priorSettlement, GetBrushForLevel("PriorSettlement"));
-                DrawSmartText("DayHighText", "Day High", dayHigh, GetBrushForLevel("DayHigh"));
-                DrawSmartText("DayLowText", "Day Low", dayLow, GetBrushForLevel("DayLow"));
-                DrawSmartText("WeekHighText", "Week High", weekHigh, GetBrushForLevel("WeekHigh"));
-                DrawSmartText("WeekLowText", "Week Low", weekLow, GetBrushForLevel("WeekLow"));
-                DrawSmartText("MonthHighText", "Month High", monthHigh, GetBrushForLevel("MonthHigh"));
-                DrawSmartText("MonthLowText", "Month Low", monthLow, GetBrushForLevel("MonthLow"));
-                DrawSmartText("YearHighText", "Year High", yearHigh, GetBrushForLevel("YearHigh"));
-                DrawSmartText("YearLowText", "Year Low", yearLow, GetBrushForLevel("YearLow"));
-                DrawSmartText("ATHText", "All-Time High", allTimeHigh, GetBrushForLevel("ATH"));
+                if (levels.ContainsKey("ONH")) DrawSmartText("ONHText" + CurrentBar, "ONH", levels["ONH"], GetBrushForLevel("ONH"));
+                if (levels.ContainsKey("ONL")) DrawSmartText("ONLText" + CurrentBar, "ONL", levels["ONL"], GetBrushForLevel("ONL"));
+                if (levels.ContainsKey("PriorSettlement")) DrawSmartText("PriorSettlementText" + CurrentBar, "Settlement", levels["PriorSettlement"], GetBrushForLevel("PriorSettlement"));
+                if (levels.ContainsKey("DayHigh")) DrawSmartText("DayHighText" + CurrentBar, "Day High", levels["DayHigh"], GetBrushForLevel("DayHigh"));
+                if (levels.ContainsKey("DayLow")) DrawSmartText("DayLowText" + CurrentBar, "Day Low", levels["DayLow"], GetBrushForLevel("DayLow"));
+                if (levels.ContainsKey("WeekHigh")) DrawSmartText("WeekHighText" + CurrentBar, "Week High", levels["WeekHigh"], GetBrushForLevel("WeekHigh"));
+                if (levels.ContainsKey("WeekLow")) DrawSmartText("WeekLowText" + CurrentBar, "Week Low", levels["WeekLow"], GetBrushForLevel("WeekLow"));
+                if (levels.ContainsKey("MonthHigh")) DrawSmartText("MonthHighText" + CurrentBar, "Month High", levels["MonthHigh"], GetBrushForLevel("MonthHigh"));
+                if (levels.ContainsKey("MonthLow")) DrawSmartText("MonthLowText" + CurrentBar, "Month Low", levels["MonthLow"], GetBrushForLevel("MonthLow"));
+                if (levels.ContainsKey("YearHigh")) DrawSmartText("YearHighText" + CurrentBar, "Year High", levels["YearHigh"], GetBrushForLevel("YearHigh"));
+                if (levels.ContainsKey("YearLow")) DrawSmartText("YearLowText" + CurrentBar, "Year Low", levels["YearLow"], GetBrushForLevel("YearLow"));
+                if (levels.ContainsKey("ATH")) DrawSmartText("ATHText" + CurrentBar, "ATH", levels["ATH"], GetBrushForLevel("ATH"));
             }
         }
 
@@ -187,24 +205,27 @@ namespace NinjaTrader.NinjaScript.Indicators
         private void DrawSmartText(string tag, string text, double yValue, Brush color)
         {
             const int textOffset = 5;
-            const double minSpacing = 15;
+            double minSpacing = TickSize * 10;
 
             // Find a suitable Y position for the text
-            double textY = yValue - (TickSize * textOffset);
+            double textY = yValue + (TickSize * textOffset);
             bool positionFound = false;
+            int maxAttempts = 20;
+            int attempts = 0;
 
-            while (!positionFound)
+            while (!positionFound && attempts < maxAttempts)
             {
                 positionFound = true;
                 foreach (var level in levels)
                 {
-                    if (Math.Abs(level.Value - textY) < minSpacing)
+                    if (Math.Abs(level.Value - textY) < minSpacing && level.Value != yValue)
                     {
-                        textY -= minSpacing;
+                        textY += minSpacing;
                         positionFound = false;
                         break;
                     }
                 }
+                attempts++;
             }
 
             Draw.Text(this, tag, text, 0, textY, color);

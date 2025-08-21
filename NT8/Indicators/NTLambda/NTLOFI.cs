@@ -9,7 +9,7 @@ using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.DrawingTools;
 using NinjaTrader.NinjaScript.Indicators;
-using NinjaTrader.NinjaScript.Indicators.LambdaLinus;
+using NinjaTrader.NinjaScript.Indicators.NTLambda;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -23,9 +23,9 @@ using System.Windows.Media;
 using System.Xml.Serialization;
 #endregion
 
-namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
+namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 {
-    public class OFIHistogram : Indicator
+    public class NTLOFI : Indicator
     {
         private double buyVolume;
         private double sellVolume;
@@ -65,8 +65,8 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
                 - Trades at mid-price: uses tick rule (compares to previous trade prices)
                 - Ambiguous trades: volume split 50/50 between buy and sell";
 
-                Name = "OFIHistogram";
-                Calculate = Calculate.OnBarClose;
+                Name = "NTL OFI Histogram";
+                Calculate = Calculate.OnEachTick;
                 IsOverlay = false;
                 DisplayInDataBox = true;
                 DrawOnPricePanel = false;
@@ -101,8 +101,6 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
             else if (State == State.Configure)
             {
                 AddDataSeries(Data.BarsPeriodType.Tick, 1);
-                AddDataSeries(Instrument.FullName, Data.BarsPeriodType.Tick, 1, Data.MarketDataType.Bid);
-                AddDataSeries(Instrument.FullName, Data.BarsPeriodType.Tick, 1, Data.MarketDataType.Ask);
             }
             else if (State == State.DataLoaded)
             {
@@ -129,47 +127,19 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
 
         protected override void OnBarUpdate()
         {
-            // Update bid/ask prices when their series update
-            if (BarsInProgress == 2) // Bid series update
-            {
-                currentBid = Close[0];
-                return;
-            }
-            else if (BarsInProgress == 3) // Ask series update
-            {
-                currentAsk = Close[0];
-                return;
-            }
-
-            // Handle trade ticks
-            if (BarsInProgress == 1)
-            {
-                double tradePrice = Close[0];
-                double tradeVolume = Volume[0];
-
-                // Classify trade using utility method
-                int classification = OrderFlowUtils.ClassifyTrade(tradePrice, currentBid, currentAsk, lastTradePrice);
-
-                if (classification > 0)
-                    buyVolume += tradeVolume;
-                else if (classification < 0)
-                    sellVolume += tradeVolume;
-                else
-                {
-                    // Split volume if unclassified
-                    buyVolume += tradeVolume * 0.5;
-                    sellVolume += tradeVolume * 0.5;
+            if(BarsInProgress == 0) {
+                // Handle main timeframe bar updates
+                if(IsFirstTickOfBar) {
+                    // Reset volumes only at the start of a new bar
+                    buyVolume = 0;
+                    sellVolume = 0;
                 }
 
-                lastTradePrice = tradePrice;
-            }
-            // Handle main timeframe bars
-            else if (BarsInProgress == 0)
-            {
-                if (CurrentBar < 1) return;
-
-                // Calculate OFI using utility
-                double ofi = OrderFlowUtils.CalculateOFI(buyVolume, sellVolume);
+                // Calculate current OFI using utility from NTLCommons only if we have volume
+                double ofi = 0;
+                if ((buyVolume + sellVolume) > 0) {
+                    ofi = OrderFlowUtils.CalculateOFI(buyVolume, sellVolume);
+                }
 
                 // Store OFI value
                 ofiValues[0] = ofi;
@@ -188,10 +158,32 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
 
                     PlotBrushes[1][0] = MAColor;
                 }
+            }
 
-                // Reset volumes for next bar
-                buyVolume = 0;
-                sellVolume = 0;
+            // Process tick data (works for both historical and tick replay)
+            if(BarsInProgress == 1) {
+                double price = BarsArray[1].GetClose(CurrentBars[1]);
+                double ask = BarsArray[1].GetAsk(CurrentBars[1]);
+                double bid = BarsArray[1].GetBid(CurrentBars[1]);
+                double volume = BarsArray[1].GetVolume(CurrentBars[1]);
+                
+                // Only process valid tick data
+                if (volume > 0 && ask > 0 && bid > 0 && ask > bid) {
+                    // Classify trades using bid/ask comparison (like AggressionDelta)
+                    if(price >= ask) {
+                        buyVolume += volume;
+                    }
+                    else if(price <= bid) {
+                        sellVolume += volume;
+                    }
+                    else {
+                        // Split volume for mid-market trades
+                        buyVolume += volume * 0.5;
+                        sellVolume += volume * 0.5;
+                    }
+
+                    lastTradePrice = price;
+                }
             }
         }
 
@@ -286,55 +278,55 @@ namespace NinjaTrader.NinjaScript.Indicators.LambdaLinus
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-    public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
-    {
-        private LambdaLinus.OFIHistogram[] cacheOFIHistogram;
-        public LambdaLinus.OFIHistogram OFIHistogram(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-        {
-            return OFIHistogram(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-        }
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private NTLambda.NTLOFI[] cacheNTLOFI;
+		public NTLambda.NTLOFI NTLOFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+		{
+			return NTLOFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+		}
 
-        public LambdaLinus.OFIHistogram OFIHistogram(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-        {
-            if (cacheOFIHistogram != null)
-                for (int idx = 0; idx < cacheOFIHistogram.Length; idx++)
-                    if (cacheOFIHistogram[idx] != null && cacheOFIHistogram[idx].MA_Type == mA_Type && cacheOFIHistogram[idx].MA_Length == mA_Length && cacheOFIHistogram[idx].ThresholdLevel1 == thresholdLevel1 && cacheOFIHistogram[idx].ThresholdLevel2 == thresholdLevel2 && cacheOFIHistogram[idx].EqualsInput(input))
-                        return cacheOFIHistogram[idx];
-            return CacheIndicator<LambdaLinus.OFIHistogram>(new LambdaLinus.OFIHistogram() { MA_Type = mA_Type, MA_Length = mA_Length, ThresholdLevel1 = thresholdLevel1, ThresholdLevel2 = thresholdLevel2 }, input, ref cacheOFIHistogram);
-        }
-    }
+		public NTLambda.NTLOFI NTLOFI(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+		{
+			if (cacheNTLOFI != null)
+				for (int idx = 0; idx < cacheNTLOFI.Length; idx++)
+					if (cacheNTLOFI[idx] != null && cacheNTLOFI[idx].MA_Type == mA_Type && cacheNTLOFI[idx].MA_Length == mA_Length && cacheNTLOFI[idx].ThresholdLevel1 == thresholdLevel1 && cacheNTLOFI[idx].ThresholdLevel2 == thresholdLevel2 && cacheNTLOFI[idx].EqualsInput(input))
+						return cacheNTLOFI[idx];
+			return CacheIndicator<NTLambda.NTLOFI>(new NTLambda.NTLOFI(){ MA_Type = mA_Type, MA_Length = mA_Length, ThresholdLevel1 = thresholdLevel1, ThresholdLevel2 = thresholdLevel2 }, input, ref cacheNTLOFI);
+		}
+	}
 }
 
 namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
-    public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
-    {
-        public Indicators.LambdaLinus.OFIHistogram OFIHistogram(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-        {
-            return indicator.OFIHistogram(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-        }
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.NTLambda.NTLOFI NTLOFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+		{
+			return indicator.NTLOFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+		}
 
-        public Indicators.LambdaLinus.OFIHistogram OFIHistogram(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-        {
-            return indicator.OFIHistogram(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-        }
-    }
+		public Indicators.NTLambda.NTLOFI NTLOFI(ISeries<double> input , MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+		{
+			return indicator.NTLOFI(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+		}
+	}
 }
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
-    public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
-    {
-        public Indicators.LambdaLinus.OFIHistogram OFIHistogram(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-        {
-            return indicator.OFIHistogram(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-        }
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.NTLambda.NTLOFI NTLOFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+		{
+			return indicator.NTLOFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+		}
 
-        public Indicators.LambdaLinus.OFIHistogram OFIHistogram(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-        {
-            return indicator.OFIHistogram(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-        }
-    }
+		public Indicators.NTLambda.NTLOFI NTLOFI(ISeries<double> input , MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+		{
+			return indicator.NTLOFI(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+		}
+	}
 }
 
 #endregion
