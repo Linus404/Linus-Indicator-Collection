@@ -40,6 +40,7 @@ A comprehensive collection of professional order flow analysis indicators for Ni
 ## Screenshots
 
 ![MoldyBars Indicator](media/MoldyBarsScreenshot.png)
+![All NTL Indicators](media/AllIndicators.png)
 
 ## Installation
 
