@@ -28,7 +28,7 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
     public class TPOIndicator : Indicator
     {
         // Simple bucket system
-        private int[] bucketCounts; // Count of TPO blocks per bucket (index 0 to LevelsPerSession-1)
+        private int[] bucketCounts; // Count of TPO blocks per bucket
         private double sessionHigh = double.MinValue;
         private double sessionLow = double.MaxValue;
         private DateTime currentSessionDate = DateTime.MinValue;
@@ -51,7 +51,6 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 
                 BlockWidthMinutes = 30;
                 BlockColor = Brushes.LightBlue;
-                SessionSizePercent = 100;
                 TPOOpacity = 60;
                 ShowVAH = true;
                 ShowVAL = true;
@@ -64,8 +63,9 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
                 ShowLetters = true;
                 LetterColor = Brushes.Blue;
                 LetterSize = 8;
-                LevelsPerSession = 15;
                 FillBlocks = true;
+                FixedBoxHeight = 10;
+                LevelsPerSession = 100;
 
                 AddPlot(new Stroke(Brushes.Transparent), PlotStyle.Line, "TPOPlot");
             }
@@ -100,19 +100,34 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
         private void StartNewSession(DateTime sessionDate)
         {
             currentSessionDate = sessionDate;
-            sessionStartTime = Time[0];
+            
+            // Use NinjaTrader's session information to get actual session start time
+            SessionIterator sessionIterator = new SessionIterator(Bars);
+            sessionIterator.GetTradingDay(sessionDate);
+            
+            // Check if we got a valid session
+            if (sessionIterator.ActualSessionBegin != DateTime.MinValue)
+            {
+                sessionStartTime = sessionIterator.ActualSessionBegin;
+            }
+            else
+            {
+                // Fallback to current bar time if session iterator fails
+                sessionStartTime = Time[0];
+            }
+            
             sessionHigh = High[0];
             sessionLow = Low[0];
             bucketCounts = new int[LevelsPerSession];
-            
+
             // Clear all previous session drawings
             ClearSessionDrawings();
         }
-        
+
         private void ClearSessionDrawings()
         {
             string dateString = currentSessionDate.ToString("yyyyMMdd");
-            
+
             // Remove all TPO and Letter objects for this session
             var objectsToRemove = new List<string>();
             foreach (var drawObject in DrawObjects)
@@ -121,12 +136,12 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
                     drawObject.Tag.StartsWith($"Letter_{dateString}_") ||
                     drawObject.Tag == $"POC_{dateString}" ||
                     drawObject.Tag == $"VAH_{dateString}" ||
-                    drawObject.Tag == $"VAL_{dateString}"))
+                    drawObject.Tag == $"VAL_{dateString}")
                 {
                     objectsToRemove.Add(drawObject.Tag);
                 }
             }
-            
+
             foreach (var tag in objectsToRemove)
             {
                 RemoveDrawObject(tag);
@@ -138,7 +153,7 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
         {
             double high = High[0];
             double low = Low[0];
-            
+
             // Check for new session high/low
             bool newExtreme = false;
             if (high > sessionHigh)
@@ -151,39 +166,47 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
                 sessionLow = low;
                 newExtreme = true;
             }
-            
+
             // If new extreme, need to redraw everything
             if (newExtreme)
             {
                 RedrawEntireSession();
                 return;
             }
-            
+
             // Normal processing - check which buckets this bar touches
+            double boxHeight = FixedBoxHeight * Instrument.MasterInstrument.TickSize;
+
+            // Calculate how many boxes we need based on current session range
             double sessionRange = sessionHigh - sessionLow;
-            if (sessionRange <= 0)
-                sessionRange = Instrument.MasterInstrument.TickSize * LevelsPerSession;
-                
-            double bucketHeight = sessionRange / LevelsPerSession;
-            
-            for (int bucket = 0; bucket < LevelsPerSession; bucket++)
+            if (sessionRange <= 0) return;
+
+            int maxBuckets = (int)Math.Ceiling(sessionRange / boxHeight) + 1;
+
+            for (int bucket = 0; bucket < maxBuckets; bucket++)
             {
-                double bucketBottom = sessionLow + (bucket * bucketHeight);
-                double bucketTop = sessionLow + ((bucket + 1) * bucketHeight);
-                
-                // Proper intersection check - last bucket includes sessionHigh
-                bool intersects = (bucket == LevelsPerSession - 1) ? 
-                    (high >= bucketBottom && low <= bucketTop) : 
-                    (high >= bucketBottom && low < bucketTop);
-                    
+                double bucketBottom = sessionLow + (bucket * boxHeight);
+                double bucketTop = bucketBottom + boxHeight;
+
+                // Check if bar intersects with this bucket
+                bool intersects = (high >= bucketBottom && low < bucketTop) ||
+                                (bucket == maxBuckets - 1 && high >= bucketBottom && low <= bucketTop);
+
                 if (intersects)
                 {
+                    if (bucket >= bucketCounts.Length)
+                    {
+                        // Resize array if needed
+                        var newArray = new int[bucket + 10];
+                        Array.Copy(bucketCounts, newArray, bucketCounts.Length);
+                        bucketCounts = newArray;
+                    }
                     bucketCounts[bucket]++; // Add 1 to bucket
                     // Draw only the NEW block for this bucket
                     DrawSingleNewBlock(bucket, bucketCounts[bucket]);
                 }
             }
-            
+
             UpdateValueArea();
         }
 
@@ -191,39 +214,39 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
         {
             // Clear all drawings for this session
             ClearSessionDrawings();
-            
-            // Recalculate all buckets from scratch
-            bucketCounts = new int[LevelsPerSession];
-            
+
+            // Calculate session range and determine bucket count dynamically
             double sessionRange = sessionHigh - sessionLow;
-            if (sessionRange <= 0)
-                sessionRange = Instrument.MasterInstrument.TickSize * LevelsPerSession;
-                
-            double bucketHeight = sessionRange / LevelsPerSession;
-            
+            if (sessionRange <= 0) return;
+
+            double boxHeight = FixedBoxHeight * Instrument.MasterInstrument.TickSize;
+            int maxBuckets = (int)Math.Ceiling(sessionRange / boxHeight) + 1;
+
+            // Recalculate all buckets from scratch
+            bucketCounts = new int[maxBuckets];
+
             // Go through all bars in current session and recalculate
             for (int i = 0; i <= CurrentBar; i++)
             {
                 if (Time[i].Date != currentSessionDate)
                     continue;
-                    
-                for (int bucket = 0; bucket < LevelsPerSession; bucket++)
+
+                for (int bucket = 0; bucket < maxBuckets; bucket++)
                 {
-                    double bucketBottom = sessionLow + (bucket * bucketHeight);
-                    double bucketTop = sessionLow + ((bucket + 1) * bucketHeight);
-                    
-                    // Proper intersection check
-                    bool intersects = (bucket == LevelsPerSession - 1) ? 
-                        (High[i] >= bucketBottom && Low[i] <= bucketTop) : 
-                        (High[i] >= bucketBottom && Low[i] < bucketTop);
-                        
+                    double bucketBottom = sessionLow + (bucket * boxHeight);
+                    double bucketTop = bucketBottom + boxHeight;
+
+                    // Check if bar intersects with this bucket
+                    bool intersects = (High[i] >= bucketBottom && Low[i] < bucketTop) ||
+                                    (bucket == maxBuckets - 1 && High[i] >= bucketBottom && Low[i] <= bucketTop);
+
                     if (intersects)
                     {
                         bucketCounts[bucket]++;
                     }
                 }
             }
-            
+
             // Draw all blocks
             DrawAllBlocks();
             UpdateValueArea();
@@ -234,36 +257,55 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             double sessionRange = sessionHigh - sessionLow;
             if (sessionRange <= 0)
                 sessionRange = Instrument.MasterInstrument.TickSize * LevelsPerSession;
-                
-            double bucketHeight = sessionRange / LevelsPerSession;
-            double blockWidth = BlockWidthMinutes * (SessionSizePercent / 100.0);
-            
-            // Calculate price boundaries
-            double bottomPrice = sessionLow + (bucket * bucketHeight);
-            double topPrice = sessionLow + ((bucket + 1) * bucketHeight);
-            
+
+            // All boxes have fixed height in ticks
+            double boxHeight = FixedBoxHeight * Instrument.MasterInstrument.TickSize;
+
+            // Each TPO block represents one chart bar that touched this price level
+            double blockWidthMinutes = GetTimeframeMinutes();
+
+            // Start from sessionLow and stack boxes of fixed height
+            double bottomPrice = sessionLow + (bucket * boxHeight);
+            double topPrice = bottomPrice + boxHeight;
+
             // Calculate time position for this specific block
-            DateTime blockStart = sessionStartTime.AddMinutes((blockNumber - 1) * blockWidth);
-            DateTime blockEnd = blockStart.AddMinutes(blockWidth);
+            DateTime blockStart = sessionStartTime.AddMinutes((blockNumber - 1) * blockWidthMinutes);
+            DateTime blockEnd = blockStart.AddMinutes(blockWidthMinutes);
             
+            // Ensure block doesn't exceed session end time
+            DateTime actualSessionEnd = GetSessionEndTime();
+            if (blockEnd > actualSessionEnd)
+            {
+                blockEnd = actualSessionEnd;
+            }
+            if (blockStart >= actualSessionEnd)
+            {
+                return; // Don't draw blocks beyond session end
+            }
+
             string tag = $"TPO_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNumber}";
-            
+
             if (ShowBlocks)
             {
-                Brush fillBrush = FillBlocks ? BlockColor.Clone() : Brushes.Transparent;
-                if (FillBlocks) fillBrush.Opacity = TPOOpacity / 100.0;
-                
+                Brush fillBrush = Brushes.Transparent;
+                if (FillBlocks)
+                {
+                    fillBrush = BlockColor.Clone();
+                    fillBrush.Opacity = TPOOpacity / 100.0;
+                }
+
                 Draw.Rectangle(this, tag, false, blockStart, bottomPrice, blockEnd, topPrice,
                     BlockColor, fillBrush, 1);
             }
-            
+
             if (ShowLetters)
             {
                 string letter = GetTPOLetter(blockNumber);
                 string letterTag = $"Letter_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNumber}";
-                DateTime letterTime = blockStart.AddMinutes(blockWidth / 2);
+
+                DateTime letterTime = blockStart.AddMinutes(blockWidthMinutes / 2);
                 double letterPrice = (bottomPrice + topPrice) / 2;
-                
+
                 Draw.Text(this, letterTag, false, letter, letterTime, letterPrice, 0,
                     LetterColor, new SimpleFont("Arial", LetterSize), TextAlignment.Center,
                     Brushes.Transparent, Brushes.Transparent, 0);
@@ -272,41 +314,60 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 
         private void DrawAllBlocks()
         {
-            double bucketHeight = (sessionHigh - sessionLow) / LevelsPerSession;
-            double blockWidth = BlockWidthMinutes * (SessionSizePercent / 100.0);
-            
-            for (int bucket = 0; bucket < LevelsPerSession; bucket++)
+            // All boxes have fixed height in ticks
+            double boxHeight = FixedBoxHeight * Instrument.MasterInstrument.TickSize;
+
+            // Each TPO block represents one chart bar that touched this price level
+            double blockWidthMinutes = GetTimeframeMinutes();
+
+            for (int bucket = 0; bucket < bucketCounts.Length; bucket++)
             {
                 int count = bucketCounts[bucket];
                 if (count == 0) continue;
-                
+
                 // Draw all blocks for this bucket
                 for (int blockNum = 1; blockNum <= count; blockNum++)
                 {
-                    double bottomPrice = sessionLow + (bucket * bucketHeight);
-                    double topPrice = sessionLow + ((bucket + 1) * bucketHeight);
+                    // Start from sessionLow and stack boxes of fixed height
+                    double bottomPrice = sessionLow + (bucket * boxHeight);
+                    double topPrice = bottomPrice + boxHeight;
+
+                    DateTime blockStart = sessionStartTime.AddMinutes((blockNum - 1) * blockWidthMinutes);
+                    DateTime blockEnd = blockStart.AddMinutes(blockWidthMinutes);
                     
-                    DateTime blockStart = sessionStartTime.AddMinutes((blockNum - 1) * blockWidth);
-                    DateTime blockEnd = blockStart.AddMinutes(blockWidth);
-                    
+                    // Ensure block doesn't exceed session end time
+                    DateTime actualSessionEnd = GetSessionEndTime();
+                    if (blockEnd > actualSessionEnd)
+                    {
+                        blockEnd = actualSessionEnd;
+                    }
+                    if (blockStart >= actualSessionEnd)
+                    {
+                        continue; // Skip blocks beyond session end
+                    }
+
                     string tag = $"TPO_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNum}";
-                    
+
                     if (ShowBlocks)
                     {
-                        Brush fillBrush = FillBlocks ? BlockColor.Clone() : Brushes.Transparent;
-                        if (FillBlocks) fillBrush.Opacity = TPOOpacity / 100.0;
-                        
+                        Brush fillBrush = Brushes.Transparent;
+                        if (FillBlocks)
+                        {
+                            fillBrush = BlockColor.Clone();
+                            fillBrush.Opacity = TPOOpacity / 100.0;
+                        }
+
                         Draw.Rectangle(this, tag, false, blockStart, bottomPrice, blockEnd, topPrice,
                             BlockColor, fillBrush, 1);
                     }
-                    
+
                     if (ShowLetters)
                     {
                         string letter = GetTPOLetter(blockNum);
                         string letterTag = $"Letter_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNum}";
-                        DateTime letterTime = blockStart.AddMinutes(blockWidth / 2);
+                        DateTime letterTime = blockStart.AddMinutes(blockWidthMinutes / 2);
                         double letterPrice = (bottomPrice + topPrice) / 2;
-                        
+
                         Draw.Text(this, letterTag, false, letter, letterTime, letterPrice, 0,
                             LetterColor, new SimpleFont("Arial", LetterSize), TextAlignment.Center,
                             Brushes.Transparent, Brushes.Transparent, 0);
@@ -325,24 +386,24 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             RemoveDrawObject($"POC_{dateString}");
             RemoveDrawObject($"VAH_{dateString}");
             RemoveDrawObject($"VAL_{dateString}");
-            
+
             // Calculate POC and VA
             var stats = CalculateMarketProfileStats();
-            
-            DateTime endTime = sessionStartTime.AddHours(8); // Approximate session end
-            
+
+            DateTime endTime = GetSessionEndTime();
+
             if (ShowPOC)
             {
                 Draw.Line(this, $"POC_{dateString}", false, sessionStartTime, stats.POC, endTime, stats.POC,
                     POCColor, DashStyleHelper.Solid, 2);
             }
-            
+
             if (ShowVAH)
             {
                 Draw.Line(this, $"VAH_{dateString}", false, sessionStartTime, stats.VAH, endTime, stats.VAH,
                     VAHColor, DashStyleHelper.Dash, 1);
             }
-            
+
             if (ShowVAL)
             {
                 Draw.Line(this, $"VAL_{dateString}", false, sessionStartTime, stats.VAL, endTime, stats.VAL,
@@ -378,7 +439,7 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             // Find POC - bucket with highest TPO count
             int pocBucket = 0;
             int maxCount = 0;
-            for (int i = 0; i < LevelsPerSession; i++)
+            for (int i = 0; i < bucketCounts.Length; i++)
             {
                 if (bucketCounts[i] > maxCount)
                 {
@@ -386,9 +447,9 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
                     pocBucket = i;
                 }
             }
-            
-            double bucketHeight = (sessionHigh - sessionLow) / LevelsPerSession;
-            stats.POC = sessionLow + (pocBucket * bucketHeight) + (bucketHeight / 2);
+
+            double boxHeight = FixedBoxHeight * Instrument.MasterInstrument.TickSize;
+            stats.POC = sessionLow + (pocBucket * boxHeight) + (boxHeight / 2);
 
             // Calculate total TPO count
             int totalTPOs = bucketCounts.Sum();
@@ -400,12 +461,12 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             int lowerBucket = pocBucket;
 
             // Expand around POC until we reach target value area percentage
-            while (valueAreaTPOs < targetValueAreaTPOs && (upperBucket < LevelsPerSession - 1 || lowerBucket > 0))
+            while (valueAreaTPOs < targetValueAreaTPOs && (upperBucket < bucketCounts.Length - 1 || lowerBucket > 0))
             {
-                int upperTPOs = (upperBucket < LevelsPerSession - 1) ? bucketCounts[upperBucket + 1] : 0;
+                int upperTPOs = (upperBucket < bucketCounts.Length - 1) ? bucketCounts[upperBucket + 1] : 0;
                 int lowerTPOs = (lowerBucket > 0) ? bucketCounts[lowerBucket - 1] : 0;
 
-                if (upperTPOs >= lowerTPOs && upperBucket < LevelsPerSession - 1)
+                if (upperTPOs >= lowerTPOs && upperBucket < bucketCounts.Length - 1)
                 {
                     upperBucket++;
                     valueAreaTPOs += upperTPOs;
@@ -419,8 +480,8 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
                     break;
             }
 
-            stats.VAH = sessionLow + (upperBucket * bucketHeight) + (bucketHeight / 2);
-            stats.VAL = sessionLow + (lowerBucket * bucketHeight) + (bucketHeight / 2);
+            stats.VAH = sessionLow + (upperBucket * boxHeight) + (boxHeight / 2);
+            stats.VAL = sessionLow + (lowerBucket * boxHeight) + (boxHeight / 2);
 
             return stats;
         }
@@ -512,23 +573,45 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             return DateTime.Now.Subtract(Time[0]).TotalMinutes > GetTimeframeMinutes() * 2;
         }
 
+        private int GetMaxPossibleBlocksPerLevel()
+        {
+            // Calculate blocks based on BlockWidthMinutes parameter
+            DateTime sessionEnd = GetSessionEndTime();
+            double sessionMinutes = sessionEnd.Subtract(sessionStartTime).TotalMinutes;
+
+            return Math.Max(1, (int)(sessionMinutes / BlockWidthMinutes));
+        }
+
+        private DateTime GetSessionEndTime()
+        {
+            // Use NinjaTrader's session information to get actual session end time
+            SessionIterator sessionIterator = new SessionIterator(Bars);
+            sessionIterator.GetTradingDay(currentSessionDate);
+            
+            // Check if we got a valid session
+            if (sessionIterator.ActualSessionEnd != DateTime.MinValue)
+            {
+                return sessionIterator.ActualSessionEnd;
+            }
+            else
+            {
+                // Fallback: assume 8 hours if session iterator fails
+                return sessionStartTime.AddHours(8);
+            }
+        }
+
 
         #region Properties
         [Range(5, 120)]
         [Display(Name = "Block Width (Minutes)", Description = "Width of each TPO block in minutes", Order = 1, GroupName = "Display")]
         public int BlockWidthMinutes { get; set; }
 
-        [Range(10, 200)]
-        [Display(Name = "Session Size (%)", Description = "Size of TPO blocks relative to session duration as percentage", Order = 2, GroupName = "Display")]
-        public int SessionSizePercent { get; set; }
-
-
         [Range(10, 100)]
-        [Display(Name = "TPO Opacity", Description = "Opacity of TPO blocks (10-100%)", Order = 4, GroupName = "Display")]
+        [Display(Name = "TPO Opacity", Description = "Opacity of TPO blocks (10-100%)", Order = 2, GroupName = "Display")]
         public int TPOOpacity { get; set; }
 
         [XmlIgnore]
-        [Display(Name = "Block Color", Description = "Color of the TPO blocks", Order = 5, GroupName = "Display")]
+        [Display(Name = "Block Color", Description = "Color of the TPO blocks", Order = 3, GroupName = "Display")]
         public Brush BlockColor { get; set; }
 
         [Browsable(false)]
@@ -605,11 +688,14 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
         [Display(Name = "Letter Size", Description = "Font size of letters in TPO blocks", Order = 16, GroupName = "Letters")]
         public int LetterSize { get; set; }
 
-        [Display(Name = "Fill Blocks", Description = "Fill TPO blocks with color", Order = 18, GroupName = "Display")]
+        [Display(Name = "Fill Blocks", Description = "Fill TPO blocks with color", Order = 17, GroupName = "Display")]
         public bool FillBlocks { get; set; }
 
-        [Range(5, 200)]
-        [Display(Name = "Levels Per Session", Description = "Number of horizontal TPO levels per session", Order = 18, GroupName = "Display")]
+        [Range(1, 100)]
+        [Display(Name = "Box Height (Ticks)", Description = "Height of TPO boxes in ticks", Order = 18, GroupName = "Display")]
+        public int FixedBoxHeight { get; set; }
+
+        [Display(Name = "Levels Per Session", Description = "Number of horizontal TPO levels per session (no upper limit)", Order = 20, GroupName = "Display")]
         public int LevelsPerSession { get; set; }
         #endregion
     }
