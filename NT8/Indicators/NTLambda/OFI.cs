@@ -25,7 +25,7 @@ using System.Xml.Serialization;
 
 namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 {
-    public class NTLOFI : Indicator
+    public class OFI : Indicator
     {
         private double buyVolume;
         private double sellVolume;
@@ -127,9 +127,11 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 
         protected override void OnBarUpdate()
         {
-            if(BarsInProgress == 0) {
+            if (BarsInProgress == 0)
+            {
                 // Handle main timeframe bar updates
-                if(IsFirstTickOfBar) {
+                if (IsFirstTickOfBar)
+                {
                     // Reset volumes only at the start of a new bar
                     buyVolume = 0;
                     sellVolume = 0;
@@ -137,7 +139,8 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 
                 // Calculate current OFI using utility from NTLCommons only if we have volume
                 double ofi = 0;
-                if ((buyVolume + sellVolume) > 0) {
+                if ((buyVolume + sellVolume) > 0)
+                {
                     ofi = OrderFlowUtils.CalculateOFI(buyVolume, sellVolume);
                 }
 
@@ -161,22 +164,27 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             }
 
             // Process tick data (works for both historical and tick replay)
-            if(BarsInProgress == 1) {
+            if (BarsInProgress == 1)
+            {
                 double price = BarsArray[1].GetClose(CurrentBars[1]);
                 double ask = BarsArray[1].GetAsk(CurrentBars[1]);
                 double bid = BarsArray[1].GetBid(CurrentBars[1]);
                 double volume = BarsArray[1].GetVolume(CurrentBars[1]);
-                
+
                 // Only process valid tick data
-                if (volume > 0 && ask > 0 && bid > 0 && ask > bid) {
+                if (volume > 0 && ask > 0 && bid > 0 && ask > bid)
+                {
                     // Classify trades using bid/ask comparison (like AggressionDelta)
-                    if(price >= ask) {
+                    if (price >= ask)
+                    {
                         buyVolume += volume;
                     }
-                    else if(price <= bid) {
+                    else if (price <= bid)
+                    {
                         sellVolume += volume;
                     }
-                    else {
+                    else
+                    {
                         // Split volume for mid-market trades
                         buyVolume += volume * 0.5;
                         sellVolume += volume * 0.5;
@@ -278,55 +286,55 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
-	{
-		private NTLambda.NTLOFI[] cacheNTLOFI;
-		public NTLambda.NTLOFI NTLOFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-		{
-			return NTLOFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-		}
+    public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+    {
+        private NTLambda.OFI[] cacheOFI;
+        public NTLambda.OFI OFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+        {
+            return OFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+        }
 
-		public NTLambda.NTLOFI NTLOFI(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-		{
-			if (cacheNTLOFI != null)
-				for (int idx = 0; idx < cacheNTLOFI.Length; idx++)
-					if (cacheNTLOFI[idx] != null && cacheNTLOFI[idx].MA_Type == mA_Type && cacheNTLOFI[idx].MA_Length == mA_Length && cacheNTLOFI[idx].ThresholdLevel1 == thresholdLevel1 && cacheNTLOFI[idx].ThresholdLevel2 == thresholdLevel2 && cacheNTLOFI[idx].EqualsInput(input))
-						return cacheNTLOFI[idx];
-			return CacheIndicator<NTLambda.NTLOFI>(new NTLambda.NTLOFI(){ MA_Type = mA_Type, MA_Length = mA_Length, ThresholdLevel1 = thresholdLevel1, ThresholdLevel2 = thresholdLevel2 }, input, ref cacheNTLOFI);
-		}
-	}
+        public NTLambda.OFI OFI(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+        {
+            if (cacheOFI != null)
+                for (int idx = 0; idx < cacheOFI.Length; idx++)
+                    if (cacheOFI[idx] != null && cacheOFI[idx].MA_Type == mA_Type && cacheOFI[idx].MA_Length == mA_Length && cacheOFI[idx].ThresholdLevel1 == thresholdLevel1 && cacheOFI[idx].ThresholdLevel2 == thresholdLevel2 && cacheOFI[idx].EqualsInput(input))
+                        return cacheOFI[idx];
+            return CacheIndicator<NTLambda.OFI>(new NTLambda.OFI() { MA_Type = mA_Type, MA_Length = mA_Length, ThresholdLevel1 = thresholdLevel1, ThresholdLevel2 = thresholdLevel2 }, input, ref cacheOFI);
+        }
+    }
 }
 
 namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
-	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
-	{
-		public Indicators.NTLambda.NTLOFI NTLOFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-		{
-			return indicator.NTLOFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-		}
+    public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+    {
+        public Indicators.NTLambda.OFI OFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+        {
+            return indicator.OFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+        }
 
-		public Indicators.NTLambda.NTLOFI NTLOFI(ISeries<double> input , MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-		{
-			return indicator.NTLOFI(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-		}
-	}
+        public Indicators.NTLambda.OFI OFI(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+        {
+            return indicator.OFI(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+        }
+    }
 }
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
-	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
-	{
-		public Indicators.NTLambda.NTLOFI NTLOFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-		{
-			return indicator.NTLOFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-		}
+    public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+    {
+        public Indicators.NTLambda.OFI OFI(MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+        {
+            return indicator.OFI(Input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+        }
 
-		public Indicators.NTLambda.NTLOFI NTLOFI(ISeries<double> input , MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
-		{
-			return indicator.NTLOFI(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
-		}
-	}
+        public Indicators.NTLambda.OFI OFI(ISeries<double> input, MAType mA_Type, int mA_Length, double thresholdLevel1, double thresholdLevel2)
+        {
+            return indicator.OFI(input, mA_Type, mA_Length, thresholdLevel1, thresholdLevel2);
+        }
+    }
 }
 
 #endregion

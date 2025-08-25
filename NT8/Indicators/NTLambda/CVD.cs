@@ -69,7 +69,7 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
                 ScaleJustification = ScaleJustification.Right;
                 PositiveBrush = Brushes.Green;
                 NegativeBrush = Brushes.Red;
-                ResetPeriod = ResetPeriodType.NoReset;
+                ResetPeriod = ResetPeriodType.Session;
             }
             else if (State == State.Configure)
             {

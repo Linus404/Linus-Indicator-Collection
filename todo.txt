@@ -1,0 +1,2 @@
+COFI should have the reset options like CVD
+TPO add merge/split profiles

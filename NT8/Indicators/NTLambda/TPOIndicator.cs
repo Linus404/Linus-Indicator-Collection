@@ -2,6 +2,7 @@ using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.Gui;
 using NinjaTrader.Gui.Chart;
+using NinjaTrader.Gui.Tools;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.DrawingTools;
 using NinjaTrader.NinjaScript.Indicators;
@@ -10,29 +11,35 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Windows;
 using System.Windows.Media;
 using System.Xml.Serialization;
 
 namespace NinjaTrader.NinjaScript.Indicators.NTLambda
 {
+    public class MarketProfileStats
+    {
+        public double POC { get; set; }
+        public double VAH { get; set; }
+        public double VAL { get; set; }
+        public double ValueAreaPercentage { get; set; } = 70.0;
+    }
+
     public class TPOIndicator : Indicator
     {
-        private Dictionary<DateTime, Dictionary<double, int>> completedSessionTPOData;
-        private Dictionary<DateTime, bool> sessionDrawnFlags;
-        private Dictionary<DateTime, DateTime> sessionStartTimes;
-        private Dictionary<double, int> currentSessionPriceCount;
-
+        // Simple bucket system
+        private int[] bucketCounts; // Count of TPO blocks per bucket (index 0 to LevelsPerSession-1)
+        private double sessionHigh = double.MinValue;
+        private double sessionLow = double.MaxValue;
         private DateTime currentSessionDate = DateTime.MinValue;
-        private DateTime currentSessionStartTime = DateTime.MinValue;
-        private DateTime sessionEndTime = DateTime.MinValue;
-        private bool currentSessionDrawn = false;
+        private DateTime sessionStartTime = DateTime.MinValue;
 
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
             {
                 Description = @"TPO/Market Profile Indicator - displays price distribution as horizontal rectangles for each session";
-                Name = "NTL TPO Indicator";
+                Name = "TPO Indicator";
                 Calculate = Calculate.OnBarClose;
                 IsOverlay = true;
                 DisplayInDataBox = false;
@@ -45,22 +52,32 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
                 BlockWidthMinutes = 30;
                 BlockColor = Brushes.LightBlue;
                 SessionSizePercent = 100;
-                ShowCurrentSessionOnly = false;
                 TPOOpacity = 60;
+                ShowVAH = true;
+                ShowVAL = true;
+                ShowPOC = true;
+                VAHColor = Brushes.Red;
+                VALColor = Brushes.Red;
+                POCColor = Brushes.Yellow;
+                ValueAreaPercentage = 70;
+                ShowBlocks = true;
+                ShowLetters = true;
+                LetterColor = Brushes.Blue;
+                LetterSize = 8;
+                LevelsPerSession = 15;
+                FillBlocks = true;
 
                 AddPlot(new Stroke(Brushes.Transparent), PlotStyle.Line, "TPOPlot");
             }
             else if (State == State.DataLoaded)
             {
-                completedSessionTPOData = new Dictionary<DateTime, Dictionary<double, int>>();
-                sessionDrawnFlags = new Dictionary<DateTime, bool>();
-                sessionStartTimes = new Dictionary<DateTime, DateTime>();
-                currentSessionPriceCount = new Dictionary<double, int>();
+                bucketCounts = new int[LevelsPerSession];
             }
             else if (State == State.Terminated)
             {
-                // Finalize last session on indicator removal
-                FinalizeCurrentSessionIfNeeded();
+                // Clean up on termination
+                if (currentSessionDate != DateTime.MinValue)
+                    ClearSessionDrawings();
             }
         }
 
@@ -74,150 +91,391 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             // Handle session change
             if (barSessionDate != currentSessionDate)
             {
-                if (currentSessionDate != DateTime.MinValue && currentSessionPriceCount.Count > 0)
-                    FinalizeSession(currentSessionDate, sessionEndTime);
-
                 StartNewSession(barSessionDate);
             }
 
-            sessionEndTime = Time[0];
-
-            UpdateCurrentSessionPriceData();
-
-            DrawTPOProfilesIfNeeded();
-
-            if (State == State.Realtime && IsLastBarOfSession())
-                FinalizeCurrentSessionIfNeeded();
+            ProcessCurrentBar();
         }
 
         private void StartNewSession(DateTime sessionDate)
         {
             currentSessionDate = sessionDate;
-            currentSessionStartTime = Time[0];
-            currentSessionPriceCount = new Dictionary<double, int>();
-            currentSessionDrawn = false;
-
-            if (ShowCurrentSessionOnly && completedSessionTPOData.Count > 0)
+            sessionStartTime = Time[0];
+            sessionHigh = High[0];
+            sessionLow = Low[0];
+            bucketCounts = new int[LevelsPerSession];
+            
+            // Clear all previous session drawings
+            ClearSessionDrawings();
+        }
+        
+        private void ClearSessionDrawings()
+        {
+            string dateString = currentSessionDate.ToString("yyyyMMdd");
+            
+            // Remove all TPO and Letter objects for this session
+            var objectsToRemove = new List<string>();
+            foreach (var drawObject in DrawObjects)
             {
-                RemoveDrawObjectsForSessions(completedSessionTPOData.Keys.ToList());
-                completedSessionTPOData.Clear();
-                sessionDrawnFlags.Clear();
-                sessionStartTimes.Clear();
+                if (drawObject.Tag.StartsWith($"TPO_{dateString}_") ||
+                    drawObject.Tag.StartsWith($"Letter_{dateString}_") ||
+                    drawObject.Tag == $"POC_{dateString}" ||
+                    drawObject.Tag == $"VAH_{dateString}" ||
+                    drawObject.Tag == $"VAL_{dateString}"))
+                {
+                    objectsToRemove.Add(drawObject.Tag);
+                }
+            }
+            
+            foreach (var tag in objectsToRemove)
+            {
+                RemoveDrawObject(tag);
             }
         }
 
-        private void FinalizeSession(DateTime sessionDate, DateTime endTime)
-        {
-            completedSessionTPOData[sessionDate] = new Dictionary<double, int>(currentSessionPriceCount);
-            sessionStartTimes[sessionDate] = currentSessionStartTime;
 
-            DrawTPOProfileForSession(sessionDate, completedSessionTPOData[sessionDate], currentSessionStartTime, endTime);
-            sessionDrawnFlags[sessionDate] = true;
-        }
-
-        private void UpdateCurrentSessionPriceData()
+        private void ProcessCurrentBar()
         {
-            double tickSize = Instrument.MasterInstrument.TickSize;
             double high = High[0];
             double low = Low[0];
-
-            for (double price = low; price <= high; price += tickSize)
+            
+            // Check for new session high/low
+            bool newExtreme = false;
+            if (high > sessionHigh)
             {
-                double roundedPrice = Math.Round(price / tickSize) * tickSize;
-                if (currentSessionPriceCount.ContainsKey(roundedPrice))
-                    currentSessionPriceCount[roundedPrice]++;
+                sessionHigh = high;
+                newExtreme = true;
+            }
+            if (low < sessionLow)
+            {
+                sessionLow = low;
+                newExtreme = true;
+            }
+            
+            // If new extreme, need to redraw everything
+            if (newExtreme)
+            {
+                RedrawEntireSession();
+                return;
+            }
+            
+            // Normal processing - check which buckets this bar touches
+            double sessionRange = sessionHigh - sessionLow;
+            if (sessionRange <= 0)
+                sessionRange = Instrument.MasterInstrument.TickSize * LevelsPerSession;
+                
+            double bucketHeight = sessionRange / LevelsPerSession;
+            
+            for (int bucket = 0; bucket < LevelsPerSession; bucket++)
+            {
+                double bucketBottom = sessionLow + (bucket * bucketHeight);
+                double bucketTop = sessionLow + ((bucket + 1) * bucketHeight);
+                
+                // Proper intersection check - last bucket includes sessionHigh
+                bool intersects = (bucket == LevelsPerSession - 1) ? 
+                    (high >= bucketBottom && low <= bucketTop) : 
+                    (high >= bucketBottom && low < bucketTop);
+                    
+                if (intersects)
+                {
+                    bucketCounts[bucket]++; // Add 1 to bucket
+                    // Draw only the NEW block for this bucket
+                    DrawSingleNewBlock(bucket, bucketCounts[bucket]);
+                }
+            }
+            
+            UpdateValueArea();
+        }
+
+        private void RedrawEntireSession()
+        {
+            // Clear all drawings for this session
+            ClearSessionDrawings();
+            
+            // Recalculate all buckets from scratch
+            bucketCounts = new int[LevelsPerSession];
+            
+            double sessionRange = sessionHigh - sessionLow;
+            if (sessionRange <= 0)
+                sessionRange = Instrument.MasterInstrument.TickSize * LevelsPerSession;
+                
+            double bucketHeight = sessionRange / LevelsPerSession;
+            
+            // Go through all bars in current session and recalculate
+            for (int i = 0; i <= CurrentBar; i++)
+            {
+                if (Time[i].Date != currentSessionDate)
+                    continue;
+                    
+                for (int bucket = 0; bucket < LevelsPerSession; bucket++)
+                {
+                    double bucketBottom = sessionLow + (bucket * bucketHeight);
+                    double bucketTop = sessionLow + ((bucket + 1) * bucketHeight);
+                    
+                    // Proper intersection check
+                    bool intersects = (bucket == LevelsPerSession - 1) ? 
+                        (High[i] >= bucketBottom && Low[i] <= bucketTop) : 
+                        (High[i] >= bucketBottom && Low[i] < bucketTop);
+                        
+                    if (intersects)
+                    {
+                        bucketCounts[bucket]++;
+                    }
+                }
+            }
+            
+            // Draw all blocks
+            DrawAllBlocks();
+            UpdateValueArea();
+        }
+
+        private void DrawSingleNewBlock(int bucket, int blockNumber)
+        {
+            double sessionRange = sessionHigh - sessionLow;
+            if (sessionRange <= 0)
+                sessionRange = Instrument.MasterInstrument.TickSize * LevelsPerSession;
+                
+            double bucketHeight = sessionRange / LevelsPerSession;
+            double blockWidth = BlockWidthMinutes * (SessionSizePercent / 100.0);
+            
+            // Calculate price boundaries
+            double bottomPrice = sessionLow + (bucket * bucketHeight);
+            double topPrice = sessionLow + ((bucket + 1) * bucketHeight);
+            
+            // Calculate time position for this specific block
+            DateTime blockStart = sessionStartTime.AddMinutes((blockNumber - 1) * blockWidth);
+            DateTime blockEnd = blockStart.AddMinutes(blockWidth);
+            
+            string tag = $"TPO_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNumber}";
+            
+            if (ShowBlocks)
+            {
+                Brush fillBrush = FillBlocks ? BlockColor.Clone() : Brushes.Transparent;
+                if (FillBlocks) fillBrush.Opacity = TPOOpacity / 100.0;
+                
+                Draw.Rectangle(this, tag, false, blockStart, bottomPrice, blockEnd, topPrice,
+                    BlockColor, fillBrush, 1);
+            }
+            
+            if (ShowLetters)
+            {
+                string letter = GetTPOLetter(blockNumber);
+                string letterTag = $"Letter_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNumber}";
+                DateTime letterTime = blockStart.AddMinutes(blockWidth / 2);
+                double letterPrice = (bottomPrice + topPrice) / 2;
+                
+                Draw.Text(this, letterTag, false, letter, letterTime, letterPrice, 0,
+                    LetterColor, new SimpleFont("Arial", LetterSize), TextAlignment.Center,
+                    Brushes.Transparent, Brushes.Transparent, 0);
+            }
+        }
+
+        private void DrawAllBlocks()
+        {
+            double bucketHeight = (sessionHigh - sessionLow) / LevelsPerSession;
+            double blockWidth = BlockWidthMinutes * (SessionSizePercent / 100.0);
+            
+            for (int bucket = 0; bucket < LevelsPerSession; bucket++)
+            {
+                int count = bucketCounts[bucket];
+                if (count == 0) continue;
+                
+                // Draw all blocks for this bucket
+                for (int blockNum = 1; blockNum <= count; blockNum++)
+                {
+                    double bottomPrice = sessionLow + (bucket * bucketHeight);
+                    double topPrice = sessionLow + ((bucket + 1) * bucketHeight);
+                    
+                    DateTime blockStart = sessionStartTime.AddMinutes((blockNum - 1) * blockWidth);
+                    DateTime blockEnd = blockStart.AddMinutes(blockWidth);
+                    
+                    string tag = $"TPO_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNum}";
+                    
+                    if (ShowBlocks)
+                    {
+                        Brush fillBrush = FillBlocks ? BlockColor.Clone() : Brushes.Transparent;
+                        if (FillBlocks) fillBrush.Opacity = TPOOpacity / 100.0;
+                        
+                        Draw.Rectangle(this, tag, false, blockStart, bottomPrice, blockEnd, topPrice,
+                            BlockColor, fillBrush, 1);
+                    }
+                    
+                    if (ShowLetters)
+                    {
+                        string letter = GetTPOLetter(blockNum);
+                        string letterTag = $"Letter_{currentSessionDate:yyyyMMdd}_{bucket}_{blockNum}";
+                        DateTime letterTime = blockStart.AddMinutes(blockWidth / 2);
+                        double letterPrice = (bottomPrice + topPrice) / 2;
+                        
+                        Draw.Text(this, letterTag, false, letter, letterTime, letterPrice, 0,
+                            LetterColor, new SimpleFont("Arial", LetterSize), TextAlignment.Center,
+                            Brushes.Transparent, Brushes.Transparent, 0);
+                    }
+                }
+            }
+        }
+
+        private void UpdateValueArea()
+        {
+            if (bucketCounts.Length == 0)
+                return;
+
+            // Remove old VA lines
+            string dateString = currentSessionDate.ToString("yyyyMMdd");
+            RemoveDrawObject($"POC_{dateString}");
+            RemoveDrawObject($"VAH_{dateString}");
+            RemoveDrawObject($"VAL_{dateString}");
+            
+            // Calculate POC and VA
+            var stats = CalculateMarketProfileStats();
+            
+            DateTime endTime = sessionStartTime.AddHours(8); // Approximate session end
+            
+            if (ShowPOC)
+            {
+                Draw.Line(this, $"POC_{dateString}", false, sessionStartTime, stats.POC, endTime, stats.POC,
+                    POCColor, DashStyleHelper.Solid, 2);
+            }
+            
+            if (ShowVAH)
+            {
+                Draw.Line(this, $"VAH_{dateString}", false, sessionStartTime, stats.VAH, endTime, stats.VAH,
+                    VAHColor, DashStyleHelper.Dash, 1);
+            }
+            
+            if (ShowVAL)
+            {
+                Draw.Line(this, $"VAL_{dateString}", false, sessionStartTime, stats.VAL, endTime, stats.VAL,
+                    VALColor, DashStyleHelper.Dash, 1);
+            }
+        }
+
+
+        private string GetTPOLetter(int index)
+        {
+            // TPO convention: A-Z, then a-z, then repeating pattern
+            if (index < 26)
+                return ((char)('A' + index)).ToString();
+            else if (index < 52)
+                return ((char)('a' + (index - 26))).ToString();
+            else
+            {
+                int repeatingIndex = (index - 52) % 52;
+                if (repeatingIndex < 26)
+                    return ((char)('A' + repeatingIndex)).ToString();
                 else
-                    currentSessionPriceCount[roundedPrice] = 1;
+                    return ((char)('a' + (repeatingIndex - 26))).ToString();
             }
         }
 
-        private void DrawTPOProfilesIfNeeded()
+        private MarketProfileStats CalculateMarketProfileStats()
         {
-            // Redraw current session every 20 bars to reduce load
-            if (!currentSessionDrawn || CurrentBar % 20 == 0)
-                DrawCurrentSession();
+            var stats = new MarketProfileStats();
 
-            foreach (var kvp in completedSessionTPOData)
+            if (bucketCounts.Length == 0)
+                return stats;
+
+            // Find POC - bucket with highest TPO count
+            int pocBucket = 0;
+            int maxCount = 0;
+            for (int i = 0; i < LevelsPerSession; i++)
             {
-                if (!sessionDrawnFlags.ContainsKey(kvp.Key) || !sessionDrawnFlags[kvp.Key])
+                if (bucketCounts[i] > maxCount)
                 {
-                    DateTime startTime = sessionStartTimes.ContainsKey(kvp.Key) ? sessionStartTimes[kvp.Key] : kvp.Key;
-                    DrawTPOProfileForSession(kvp.Key, kvp.Value, startTime, sessionEndTime);
-                    sessionDrawnFlags[kvp.Key] = true;
+                    maxCount = bucketCounts[i];
+                    pocBucket = i;
                 }
             }
-        }
+            
+            double bucketHeight = (sessionHigh - sessionLow) / LevelsPerSession;
+            stats.POC = sessionLow + (pocBucket * bucketHeight) + (bucketHeight / 2);
 
-        private void DrawCurrentSession()
-        {
-            if (currentSessionPriceCount.Count == 0)
-                return;
+            // Calculate total TPO count
+            int totalTPOs = bucketCounts.Sum();
+            int targetValueAreaTPOs = (int)(totalTPOs * (ValueAreaPercentage / 100.0));
 
-            RemoveDrawObjectsForSession(currentSessionDate);
+            // Find Value Area High and Low
+            int valueAreaTPOs = bucketCounts[pocBucket];
+            int upperBucket = pocBucket;
+            int lowerBucket = pocBucket;
 
-            DrawTPOProfileForSession(currentSessionDate, currentSessionPriceCount, currentSessionStartTime, sessionEndTime);
-            currentSessionDrawn = true;
-        }
-
-        private void DrawTPOProfileForSession(DateTime sessionDate, Dictionary<double, int> priceData, DateTime startTime, DateTime endTime)
-        {
-            if (priceData.Count == 0)
-                return;
-
-            double tickSize = Instrument.MasterInstrument.TickSize;
-            bool useCandleWidthMethod = ShouldUseCandleWidth();
-
-            foreach (var kvp in priceData.OrderBy(k => k.Key))
+            // Expand around POC until we reach target value area percentage
+            while (valueAreaTPOs < targetValueAreaTPOs && (upperBucket < LevelsPerSession - 1 || lowerBucket > 0))
             {
-                double price = kvp.Key;
-                int count = kvp.Value;
+                int upperTPOs = (upperBucket < LevelsPerSession - 1) ? bucketCounts[upperBucket + 1] : 0;
+                int lowerTPOs = (lowerBucket > 0) ? bucketCounts[lowerBucket - 1] : 0;
 
-                for (int i = 0; i < count; i++)
+                if (upperTPOs >= lowerTPOs && upperBucket < LevelsPerSession - 1)
                 {
-                    string tag = $"TPO_{sessionDate:yyyyMMdd}_{price:F5}_{i}";
-
-                    DateTime blockStartTime, blockEndTime;
-
-                    if (useCandleWidthMethod)
-                    {
-                        double timeframeMinutes = GetTimeframeMinutes();
-                        blockStartTime = startTime.AddMinutes(i * timeframeMinutes);
-                        blockEndTime = blockStartTime.AddMinutes(timeframeMinutes);
-                    }
-                    else
-                    {
-                        double adjustedBlockWidth = BlockWidthMinutes * (SessionSizePercent / 100.0);
-                        blockStartTime = startTime.AddMinutes(i * adjustedBlockWidth);
-                        blockEndTime = blockStartTime.AddMinutes(adjustedBlockWidth);
-                    }
-
-                    double topPrice = price + (tickSize * 0.4);
-                    double bottomPrice = price - (tickSize * 0.4);
-
-                    var brush = BlockColor.Clone();
-                    brush.Opacity = TPOOpacity / 100.0;
-
-                    try
-                    {
-                        Draw.Rectangle(this, tag, false, blockStartTime, bottomPrice, blockEndTime, topPrice,
-                            brush, brush, 1);
-                    }
-                    catch
-                    {
-                        continue;
-                    }
+                    upperBucket++;
+                    valueAreaTPOs += upperTPOs;
                 }
+                else if (lowerBucket > 0)
+                {
+                    lowerBucket--;
+                    valueAreaTPOs += lowerTPOs;
+                }
+                else
+                    break;
+            }
+
+            stats.VAH = sessionLow + (upperBucket * bucketHeight) + (bucketHeight / 2);
+            stats.VAL = sessionLow + (lowerBucket * bucketHeight) + (bucketHeight / 2);
+
+            return stats;
+        }
+
+        private void DrawMarketProfileLines(DateTime sessionDate, MarketProfileStats stats, DateTime startTime, DateTime endTime)
+        {
+            string dateString = sessionDate.ToString("yyyyMMdd");
+
+            if (ShowPOC)
+            {
+                string pocTag = $"POC_{dateString}";
+                Draw.Line(this, pocTag, false, startTime, stats.POC, endTime, stats.POC,
+                    POCColor, DashStyleHelper.Solid, 2);
+            }
+
+            if (ShowVAH)
+            {
+                string vahTag = $"VAH_{dateString}";
+                Draw.Line(this, vahTag, false, startTime, stats.VAH, endTime, stats.VAH,
+                    VAHColor, DashStyleHelper.Dash, 1);
+            }
+
+            if (ShowVAL)
+            {
+                string valTag = $"VAL_{dateString}";
+                Draw.Line(this, valTag, false, startTime, stats.VAL, endTime, stats.VAL,
+                    VALColor, DashStyleHelper.Dash, 1);
             }
         }
 
         private void RemoveDrawObjectsForSession(DateTime sessionDate)
         {
-            string prefix = $"TPO_{sessionDate:yyyyMMdd}_";
-            var tags = DrawObjects.Where(obj => obj.Tag?.StartsWith(prefix) == true)
-                                  .Select(obj => obj.Tag).ToList();
+            string dateString = sessionDate.ToString("yyyyMMdd");
 
-            foreach (string tag in tags)
+            // Remove draw objects by iterating and removing individually
+            var objectsToRemove = new List<string>();
+
+            // Collect all draw object keys that match our patterns
+            foreach (var drawObject in DrawObjects)
+            {
+                if (drawObject.Tag.StartsWith($"TPO_{dateString}") ||
+                    drawObject.Tag.StartsWith($"Letter_{dateString}") ||
+                    drawObject.Tag == $"POC_{dateString}" ||
+                    drawObject.Tag == $"VAH_{dateString}" ||
+                    drawObject.Tag == $"VAL_{dateString}")
+                {
+                    objectsToRemove.Add(drawObject.Tag);
+                }
+            }
+
+            // Remove collected objects
+            foreach (var tag in objectsToRemove)
+            {
                 RemoveDrawObject(tag);
+            }
         }
 
         private void RemoveDrawObjectsForSessions(List<DateTime> sessionDates)
@@ -254,15 +512,6 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             return DateTime.Now.Subtract(Time[0]).TotalMinutes > GetTimeframeMinutes() * 2;
         }
 
-        private void FinalizeCurrentSessionIfNeeded()
-        {
-            if (currentSessionDate != DateTime.MinValue &&
-                currentSessionPriceCount.Count > 0 &&
-                !completedSessionTPOData.ContainsKey(currentSessionDate))
-            {
-                FinalizeSession(currentSessionDate, sessionEndTime);
-            }
-        }
 
         #region Properties
         [Range(5, 120)]
@@ -273,8 +522,6 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
         [Display(Name = "Session Size (%)", Description = "Size of TPO blocks relative to session duration as percentage", Order = 2, GroupName = "Display")]
         public int SessionSizePercent { get; set; }
 
-        [Display(Name = "Show Current Session Only", Description = "Only show TPO data for current session", Order = 3, GroupName = "Display")]
-        public bool ShowCurrentSessionOnly { get; set; }
 
         [Range(10, 100)]
         [Display(Name = "TPO Opacity", Description = "Opacity of TPO blocks (10-100%)", Order = 4, GroupName = "Display")]
@@ -290,10 +537,83 @@ namespace NinjaTrader.NinjaScript.Indicators.NTLambda
             get { return Serialize.BrushToString(BlockColor); }
             set { BlockColor = Serialize.StringToBrush(value); }
         }
+
+        [Display(Name = "Show VAH", Description = "Show Value Area High line", Order = 6, GroupName = "Market Profile")]
+        public bool ShowVAH { get; set; }
+
+        [Display(Name = "Show VAL", Description = "Show Value Area Low line", Order = 7, GroupName = "Market Profile")]
+        public bool ShowVAL { get; set; }
+
+        [Display(Name = "Show POC", Description = "Show Point of Control line", Order = 8, GroupName = "Market Profile")]
+        public bool ShowPOC { get; set; }
+
+        [Range(50, 90)]
+        [Display(Name = "Value Area %", Description = "Percentage of volume for Value Area calculation", Order = 9, GroupName = "Market Profile")]
+        public int ValueAreaPercentage { get; set; }
+
+        [XmlIgnore]
+        [Display(Name = "VAH Color", Description = "Color of the Value Area High line", Order = 10, GroupName = "Market Profile")]
+        public Brush VAHColor { get; set; }
+
+        [Browsable(false)]
+        public string VAHColorSerialize
+        {
+            get { return Serialize.BrushToString(VAHColor); }
+            set { VAHColor = Serialize.StringToBrush(value); }
+        }
+
+        [XmlIgnore]
+        [Display(Name = "VAL Color", Description = "Color of the Value Area Low line", Order = 11, GroupName = "Market Profile")]
+        public Brush VALColor { get; set; }
+
+        [Browsable(false)]
+        public string VALColorSerialize
+        {
+            get { return Serialize.BrushToString(VALColor); }
+            set { VALColor = Serialize.StringToBrush(value); }
+        }
+
+        [XmlIgnore]
+        [Display(Name = "POC Color", Description = "Color of the Point of Control line", Order = 12, GroupName = "Market Profile")]
+        public Brush POCColor { get; set; }
+
+        [Browsable(false)]
+        public string POCColorSerialize
+        {
+            get { return Serialize.BrushToString(POCColor); }
+            set { POCColor = Serialize.StringToBrush(value); }
+        }
+
+        [Display(Name = "Show Blocks", Description = "Show TPO blocks/rectangles", Order = 13, GroupName = "Display")]
+        public bool ShowBlocks { get; set; }
+
+        [Display(Name = "Show Letters", Description = "Show letters in TPO blocks", Order = 14, GroupName = "Letters")]
+        public bool ShowLetters { get; set; }
+
+        [XmlIgnore]
+        [Display(Name = "Letter Color", Description = "Color of the letters in TPO blocks", Order = 15, GroupName = "Letters")]
+        public Brush LetterColor { get; set; }
+
+        [Browsable(false)]
+        public string LetterColorSerialize
+        {
+            get { return Serialize.BrushToString(LetterColor); }
+            set { LetterColor = Serialize.StringToBrush(value); }
+        }
+
+        [Range(6, 20)]
+        [Display(Name = "Letter Size", Description = "Font size of letters in TPO blocks", Order = 16, GroupName = "Letters")]
+        public int LetterSize { get; set; }
+
+        [Display(Name = "Fill Blocks", Description = "Fill TPO blocks with color", Order = 18, GroupName = "Display")]
+        public bool FillBlocks { get; set; }
+
+        [Range(5, 200)]
+        [Display(Name = "Levels Per Session", Description = "Number of horizontal TPO levels per session", Order = 18, GroupName = "Display")]
+        public int LevelsPerSession { get; set; }
         #endregion
     }
 }
-
 
 #region NinjaScript generated code. Neither change nor remove.
 
