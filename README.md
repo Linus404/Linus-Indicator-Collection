@@ -15,7 +15,7 @@ A comprehensive collection of professional order flow analysis indicators for Ni
 - **MoldyHighlights** - Price action highlighting based on volume and order flow patterns
 - **COFI (Cumulative Order Flow Imbalance)** - Order flow imbalance tracking with weighting options
 - **OFI Histogram** - Order Flow Imbalance histogram visualization with threshold levels
-- **TPO Overlay** - Time Price Opportunity overlay - currently only blocks
+- **TPO Overlay** - Time Price Opportunity overlay
 
 ### OrderFlowKit - Advanced Order Flow Analysis Suite
 - **Bookmap** - Level 2 depth of market visualization with heat mapping, aggressive order detection, real-time session recording, and replay capabilities
