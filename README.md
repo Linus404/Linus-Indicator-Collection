@@ -1,4 +1,5 @@
 # NTLambda - NinjaTrader 8 Indicators
+## I will do a complete NinjaTrader overhaul soon. Redo every indicator and add new ones (mainly focosing on order flow and volume trading) :> 
 
 A comprehensive collection of professional order flow analysis indicators for NinjaTrader 8, providing traders with advanced order flow tools including volume profile, cumulative delta, VWAP, market depth visualization, and sophisticated order flow analysis suite.
 
