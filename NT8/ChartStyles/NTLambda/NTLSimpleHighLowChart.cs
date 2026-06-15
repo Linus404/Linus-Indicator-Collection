@@ -2,6 +2,7 @@
 using System;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Xml.Serialization;
 using NinjaTrader.Gui.Chart;
 using NinjaTrader.Gui;
 using NinjaTrader.NinjaScript;
@@ -43,7 +44,7 @@ namespace NinjaTrader.NinjaScript.ChartStyles
             }
         }
 
-        public override int GetBarPaintWidth(int barWidth) => barWidth;
+        public override int GetBarPaintWidth(int barWidth) { return barWidth; }
 
         public override void OnRender(ChartControl chartControl, ChartScale chartScale, ChartBars chartBars)
         {
@@ -96,7 +97,7 @@ namespace NinjaTrader.NinjaScript.ChartStyles
             }
             catch (Exception ex)
             {
-                Print($"Error drawing high line: {ex}");
+                Print("Error drawing high line: " + ex);
             }
         }
 
@@ -130,7 +131,7 @@ namespace NinjaTrader.NinjaScript.ChartStyles
             catch (Exception ex)
             {
                 // Log error but continue rendering
-                Print($"Error drawing low line: {ex.Message}");
+                Print("Error drawing low line: " + ex.Message);
             }
         }
 
@@ -165,12 +166,13 @@ namespace NinjaTrader.NinjaScript.ChartStyles
                 }
                 catch (Exception ex)
                 {
-                    Print($"Error creating brushes: {ex.Message}");
+                    Print("Error creating brushes: " + ex.Message);
                 }
             }
         }
 
         #region Properties
+        [XmlIgnore]
         [Display(Name = "High Line Color", GroupName = "Colors", Order = 1)]
         public SystemBrush HighLineColor { get; set; }
 
@@ -181,6 +183,7 @@ namespace NinjaTrader.NinjaScript.ChartStyles
             set { HighLineColor = Serialize.StringToBrush(value); }
         }
 
+        [XmlIgnore]
         [Display(Name = "Low Line Color", GroupName = "Colors", Order = 2)]
         public SystemBrush LowLineColor { get; set; }
 

@@ -1,7 +1,7 @@
 /*
  * NTLAnchoredVwap.cs
  * Copyright (c) 2025 Roldão Rego Jr.
- * 
+ *
  * Modified by https://github.com/Linus404, 2025
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -66,7 +66,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools.NTLambda
 		}
 		#endregion
 
-		public enum PriceSource
+		public enum NTLAnchoredVwapPriceSource
 		{
 			Close,
 			HLC3,
@@ -77,7 +77,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools.NTLambda
 
 		#region Private properties
 		private static float MinimumSize = 5f;
-		private PriceSource calculatedPriceSource = PriceSource.HLC3;
+		private NTLAnchoredVwapPriceSource calculatedPriceSource = NTLAnchoredVwapPriceSource.HLC3;
 
 		private double BarWidth
 		{
@@ -121,7 +121,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools.NTLambda
 			{
 				Name				= "Anchored VWAP (NTL)";
 				Description			= @"Plot VWAP from anchored bar with Standard Deviation Bands";
-				PriceSourceInput	= PriceSource.HLC3;
+				PriceSourceInput	= NTLAnchoredVwapPriceSource.HLC3;
 				Stroke				= new Stroke(Brushes.DeepSkyBlue, 1);
 				UpperBand1Stroke	= new Stroke(Brushes.LimeGreen, 1);
 				LowerBand1Stroke	= new Stroke(Brushes.LimeGreen, 1);
@@ -247,15 +247,15 @@ namespace NinjaTrader.NinjaScript.DrawingTools.NTLambda
 		{
 			switch(PriceSourceInput)
 			{
-				case PriceSource.Close:
+				case NTLAnchoredVwapPriceSource.Close:
 					return ChartBars.Bars.GetClose(currentBar);
-				case PriceSource.HLC3:
+				case NTLAnchoredVwapPriceSource.HLC3:
 					return (ChartBars.Bars.GetHigh(currentBar) + ChartBars.Bars.GetLow(currentBar) + ChartBars.Bars.GetClose(currentBar)) / 3.0;
-				case PriceSource.HL2:
+				case NTLAnchoredVwapPriceSource.HL2:
 					return (ChartBars.Bars.GetHigh(currentBar) + ChartBars.Bars.GetLow(currentBar)) / 2.0;
-				case PriceSource.OHLC4:
+				case NTLAnchoredVwapPriceSource.OHLC4:
 					return (ChartBars.Bars.GetOpen(currentBar) + ChartBars.Bars.GetHigh(currentBar) + ChartBars.Bars.GetLow(currentBar) + ChartBars.Bars.GetClose(currentBar)) / 4.0;
-				case PriceSource.HLCC4:
+				case NTLAnchoredVwapPriceSource.HLCC4:
 					return (ChartBars.Bars.GetHigh(currentBar) + ChartBars.Bars.GetLow(currentBar) + ChartBars.Bars.GetClose(currentBar) + ChartBars.Bars.GetClose(currentBar)) / 4.0;
 				default:
 					return (ChartBars.Bars.GetHigh(currentBar) + ChartBars.Bars.GetLow(currentBar) + ChartBars.Bars.GetClose(currentBar)) / 3.0;
@@ -269,13 +269,13 @@ namespace NinjaTrader.NinjaScript.DrawingTools.NTLambda
 			var tickSize = AttachedTo.Instrument.MasterInstrument.TickSize;
 
 			if(Math.Abs(Anchor.Price - close) < tickSize) {
-				PriceSourceInput = PriceSource.Close;
+				PriceSourceInput = NTLAnchoredVwapPriceSource.Close;
 			} else if(Math.Abs(Anchor.Price - low) < tickSize) {
-				PriceSourceInput = PriceSource.HL2;
+				PriceSourceInput = NTLAnchoredVwapPriceSource.HL2;
 			} else if(Math.Abs(Anchor.Price - high) < tickSize) {
-				PriceSourceInput = PriceSource.HL2;
+				PriceSourceInput = NTLAnchoredVwapPriceSource.HL2;
 			} else {
-				PriceSourceInput = PriceSource.HLC3;
+				PriceSourceInput = NTLAnchoredVwapPriceSource.HLC3;
 			}
 		}
 
@@ -377,7 +377,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools.NTLambda
 			for(int i = StartBar + 1; i < EndBar; i++) {
 				if(!vwap.ContainsKey(i - 1)) continue;
 				if(i > ChartBars.ToIndex) break;
-				
+
 				// Render VWAP line
 				SharpDX.Vector2 startPoint = new SharpDX.Vector2(
 					chartControl.GetXByBarIndex(ChartBars, i - 1),
@@ -446,7 +446,7 @@ namespace NinjaTrader.NinjaScript.DrawingTools.NTLambda
 		public ChartAnchor Anchor { get; set; }
 
 		[Display(Name = "Price Source", Description = "Source for price calculation", Order = 1, GroupName = "Parameters")]
-		public PriceSource PriceSourceInput { get; set; }
+		public NTLAnchoredVwapPriceSource PriceSourceInput { get; set; }
 
 		[Display(Name = "Show First Std Dev Bands", Description = "Show first standard deviation bands", Order = 2, GroupName = "Parameters")]
 		public bool ShowFirstBands { get; set; }
